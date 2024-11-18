@@ -1,3 +1,5 @@
+/// <reference lib="deno.ns" />
+
 import leaflet from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./style.css";
@@ -10,17 +12,23 @@ interface Coin {
   serial: number;
 }
 
+interface Memento<T> {
+  toMemento(): void;
+  fromMemento(): void;
+}
+
 interface Cache {
   i: number;
   j: number;
   coins: Coin[];
 }
 
-class FlyweightCacheFactory {
-  private cacheMap: Map<string, Cache> = new Map();
+class FlyweightCache implements Memento<string> {
+  public cacheMap: Map<string, Cache> = new Map();
 
   public getCache(i: number, j: number): Cache {
     const key = `${i}, ${j}`;
+
     if (!this.cacheMap.has(key)) {
       const newCache: Cache = {
         i: i * GCS_CONVERSION,
@@ -33,10 +41,52 @@ class FlyweightCacheFactory {
 
     return this.cacheMap.get(key)!;
   }
+
+  public toMemento(): void {
+    const cachesToData = Array.from(this.cacheMap.values()).filter((cache) =>
+      !this.isInPlayerView(cache)
+    );
+    const cacheData = cachesToData.map((cache) => ({
+      i: cache.i,
+      j: cache.j,
+      coins: cache.coins,
+    }));
+
+    localStorage.setItem("cacheData", JSON.stringify(cacheData));
+
+    cachesToData.forEach((cache) => {
+      const key = `${cache.i}, ${cache.j}`;
+      this.cacheMap.delete(key);
+    });
+  }
+
+  public fromMemento(): void {
+    const caches = localStorage.getItem("cacheData");
+
+    if (caches) {
+      const cacheData: { i: number; j: number; coins: Coin[] }[] = JSON.parse(
+        caches,
+      );
+
+      cacheData.forEach((cacheObj) => {
+        const cache = this.getCache(cacheObj.i, cacheObj.j);
+        cache.coins = cacheObj.coins;
+      });
+    }
+  }
+
+  public isInPlayerView(cache: Cache): boolean {
+    const playerLocation = marker.getLatLng();
+    const cacheLocation = getCellCenter(cache);
+
+    const distance = playerLocation.distanceTo(cacheLocation);
+
+    return distance <= GRID_SIZE * 15;
+  }
 }
 
-const cacheArray: Cache[] = [];
 const playerCoins: Coin[] = [];
+const flyweightCache = new FlyweightCache();
 
 const NULL_ISLAND = leaflet.latLng(0, 0);
 const GAMEPLAY_ZOOM_LEVEL = 19;
@@ -45,6 +95,8 @@ const GRID_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 const MARKER_RADIUS = 15;
 const GCS_CONVERSION = 1000;
+
+let cacheMarkers: leaflet.Rectangle[] = [];
 
 const map = leaflet.map(document.getElementById("map")!, {
   center: NULL_ISLAND,
@@ -59,38 +111,63 @@ leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
 }).addTo(map);
 
-leaflet.circleMarker(NULL_ISLAND, {
+const marker = leaflet.circleMarker(NULL_ISLAND, {
   radius: MARKER_RADIUS,
   color: "red",
 }).bindTooltip("You are here!").addTo(map);
 
+document.querySelector<HTMLDivElement>("#moveDirections")!;
+
+document.addEventListener("DOMContentLoaded", () => {
+  const moveUpButton = document.getElementById("up");
+  const moveDownButton = document.getElementById("down");
+  const moveLeftButton = document.getElementById("left");
+  const moveRightButton = document.getElementById("right");
+
+  if (moveUpButton) moveUpButton.addEventListener("click", () => panMap("up"));
+  if (moveDownButton) {
+    moveDownButton.addEventListener("click", () => panMap("down"));
+  }
+  if (moveLeftButton) {
+    moveLeftButton.addEventListener("click", () => panMap("left"));
+  }
+  if (moveRightButton) {
+    moveRightButton.addEventListener("click", () => panMap("right"));
+  }
+});
+
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
 statusPanel.innerHTML = "Coins Collected:";
 
-generateCaches();
+generateInitialCaches();
 displayCaches();
 
 function spawnCache(cache: Cache) {
   const bounds = getCellBounds(cache);
   const rect = leaflet.rectangle(bounds).setStyle({ color: "gold" });
   rect.addTo(map);
+  cacheMarkers.push(rect);
 
   createCachePopup(rect, cache);
 }
 
 function createCachePopup(rect: leaflet.rectangle, cache: Cache) {
-  const coinAmount = Math.floor(
-    luck([cache.i, cache.j, "initialVal"].toString()) * 10,
-  );
+  if (cache.coins.length === 0) {
+    const coinAmount = Math.floor(
+      luck([cache.i, cache.j, "initialVal"].toString()) * 10,
+    );
 
+    for (let serial = 0; serial < coinAmount; serial += 1) {
+      const newCoin: Coin = { i: cache.i, j: cache.j, serial };
+      cache.coins.push(newCoin);
+    }
+  }
+
+  const coinAmount = cache.coins.length;
   let coinString: string = "";
 
-  for (let serial = 0; serial < coinAmount; serial += 1) {
-    const newCoin: Coin = { i: cache.i, j: cache.j, serial };
-    cache.coins.push(newCoin);
-
-    coinString += newCoin.i.toString() + ":" + newCoin.j.toString() + "#" +
-      newCoin.serial + "<br>";
+  for (const coin of cache.coins) {
+    coinString += `${coin.i}:${coin.j}#${coin.serial}<br>`;
   }
 
   const popupContent =
@@ -172,21 +249,104 @@ function getCellBounds(cache: Cache) {
   return leaflet.latLngBounds(northEastCorner, southWestCorner);
 }
 
-function generateCaches() {
-  const cachefactory = new FlyweightCacheFactory();
+function getCellCenter(cache: Cache) {
+  const origin = NULL_ISLAND;
+
+  const centerLat = (origin.lat + (cache.i + 0.5) * TILE_SIZE) / GCS_CONVERSION;
+  const centerLng = (origin.lng + (cache.j + 0.5) * TILE_SIZE) / GCS_CONVERSION;
+
+  return leaflet.latLng(centerLat, centerLng);
+}
+
+function generateInitialCaches() {
   for (let i = -GRID_SIZE; i < GRID_SIZE; i++) {
     for (let j = -GRID_SIZE; j < GRID_SIZE; j++) {
       if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-        const cache = cachefactory.getCache(i, j);
+        flyweightCache.getCache(i, j);
+      }
+    }
+  }
+}
 
-        cacheArray.push(cache);
+function generateCaches(direction: string) {
+  const currentPlayerI = Math.floor(
+    marker.getLatLng().lat * GCS_CONVERSION / TILE_SIZE,
+  );
+  const currentPlayerJ = Math.floor(
+    marker.getLatLng().lng * GCS_CONVERSION / TILE_SIZE,
+  );
+
+  let newPlayerGridI = currentPlayerI;
+  let newPlayerGridJ = currentPlayerJ;
+
+  switch (direction) {
+    case "up":
+      newPlayerGridI -= GRID_SIZE;
+      break;
+    case "down":
+      newPlayerGridI += GRID_SIZE;
+      break;
+    case "left":
+      newPlayerGridJ -= GRID_SIZE;
+      break;
+    case "right":
+      newPlayerGridJ += GRID_SIZE;
+      break;
+  }
+
+  for (let i = newPlayerGridI; i < newPlayerGridI + (2 * GRID_SIZE); i++) {
+    for (let j = newPlayerGridJ; j < newPlayerGridJ + (2 * GRID_SIZE); j++) {
+      const key = `${i}, ${j}`;
+      if (
+        luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY &&
+        !flyweightCache.cacheMap.has(key)
+      ) {
+        flyweightCache.getCache(i, j);
       }
     }
   }
 }
 
 function displayCaches() {
-  cacheArray.forEach((cache) => {
-    spawnCache(cache);
+  clearCacheMarkers();
+
+  flyweightCache.cacheMap.forEach((cache) => {
+    if (flyweightCache.isInPlayerView(cache)) {
+      spawnCache(cache);
+    }
   });
+}
+
+function panMap(direction: string) {
+  const currentLatLng = marker.getLatLng();
+
+  let newLat = currentLatLng.lat;
+  let newLng = currentLatLng.lng;
+
+  switch (direction) {
+    case "up":
+      newLat += TILE_SIZE;
+      break;
+    case "down":
+      newLat -= TILE_SIZE;
+      break;
+    case "left":
+      newLng -= TILE_SIZE;
+      break;
+    case "right":
+      newLng += TILE_SIZE;
+      break;
+  }
+
+  generateCaches(direction);
+
+  marker.setLatLng([newLat, newLng]);
+  map.setView([newLat, newLng]);
+
+  displayCaches();
+}
+
+function clearCacheMarkers() {
+  cacheMarkers.forEach((marker) => marker.remove());
+  cacheMarkers = [];
 }
