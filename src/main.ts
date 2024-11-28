@@ -184,7 +184,7 @@ class GameState
 
       marker.setLatLng([0, 0]);
       map.setView([0, 0], GAMEPLAY_ZOOM_LEVEL);
-      playerCoins.length = 0;
+      playerInventory.clearInventory();
       cacheManager.clearCachesFromMap();
       clearCacheMarkers();
 
@@ -193,7 +193,7 @@ class GameState
       polylineCoords = [[0, 0]];
       polyline.setLatLngs(polylineCoords);
       statusPanel.innerHTML = "Coins Collected:<br>";
-      this.saveGameState(marker.getLatLng(), playerCoins, cacheManager);
+      this.saveGameState(marker.getLatLng(), playerInventory.getInventory(), cacheManager);
     }
   }
 
@@ -237,7 +237,39 @@ class FlyweightCache
 
 }
 
-const playerCoins: Coin[] = [];
+
+class PlayerInventory
+{
+  public coins: Coin[] = [];
+
+  public addCoin(coin: Coin): void
+  {
+    this.coins.push(coin);
+  }
+
+  public removeCoin(): Coin | undefined
+  {
+    return this.coins.pop();
+  }
+
+  public getInventory(): Coin[]
+  {
+    return this.coins;
+  }
+
+  public clearInventory(): void
+  {
+    this.coins = [];
+  }
+
+  public getTotal(): number
+  {
+    return this.coins.length;
+  }
+}
+
+
+const playerInventory = new PlayerInventory();
 const flyweightCache = new FlyweightCache();
 
 const NULL_ISLAND = leaflet.latLng(0, 0);
@@ -272,7 +304,7 @@ document.querySelector<HTMLDivElement>("#buttons")!;
 
 document.addEventListener("DOMContentLoaded", () => {
   
-  flyweightCache.restoreGameState(playerCoins);
+  flyweightCache.restoreGameState(playerInventory.getInventory());
 
   const geoLocationButton = document.getElementById("geolocation");
   const moveUpButton = document.getElementById("up");
@@ -306,7 +338,7 @@ const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
 statusPanel.innerHTML = "Coins Collected:";
 
 generateInitialCaches(0, 0);
-flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+flyweightCache.saveGameState(marker.getLatLng(), playerInventory.getInventory());
 displayCaches();
 
 let polylineCoords: leaflet.LatLngExpression[] = [[0, 0]];
@@ -354,9 +386,9 @@ function createCachePopup(rect: leaflet.rectangle, cache: Cache) {
         if (cache.coins.length > 0) {
           const coin = cache.coins.pop();
           if (coin) {
-            playerCoins.push(coin);
+            playerInventory.addCoin(coin);
           }
-          updateDisplay(cache, playerCoins, rect);
+          updateDisplay(cache, playerInventory.getInventory(), rect);
         }
       });
     }
@@ -365,13 +397,13 @@ function createCachePopup(rect: leaflet.rectangle, cache: Cache) {
 
     if (depositButton) {
       depositButton.addEventListener("click", function () {
-        if (playerCoins.length > 0) {
-          const coin = playerCoins.pop();
+        if (playerInventory.getTotal() > 0) {
+          const coin = playerInventory.removeCoin()
           if (coin) {
             cache.coins.push(coin);
           }
 
-          updateDisplay(cache, playerCoins, rect);
+          updateDisplay(cache, playerInventory.getInventory(), rect);
         }
       });
     }
@@ -422,7 +454,7 @@ function generateInitialCaches(positionI: number, positionJ: number) {
     }
   }
 
-  flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+  flyweightCache.saveGameState(marker.getLatLng(), playerInventory.getInventory());
 }
 
 function generateCaches(direction: string) {
@@ -463,7 +495,7 @@ function generateCaches(direction: string) {
     }
   }
 
-  flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+  flyweightCache.saveGameState(marker.getLatLng(), playerInventory.getInventory());
 }
 
 function displayCaches() {
@@ -504,7 +536,7 @@ function panMap(direction: string) {
   marker.setLatLng([newLat, newLng]);
   map.setView([newLat, newLng]);
 
-  flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+  flyweightCache.saveGameState(marker.getLatLng(), playerInventory.getInventory());
 
   displayCaches();
 
@@ -525,7 +557,7 @@ function goToGeolocation() {
 
       generateInitialCaches(geolocationI, geolocationJ);
 
-      flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+      flyweightCache.saveGameState(marker.getLatLng(), playerInventory.getInventory());
 
       displayCaches();
     }, (error) => {
