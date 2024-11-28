@@ -12,51 +12,98 @@ interface Coin {
   serial: number;
 }
 
-interface Memento<T> {
-  toMemento(): void;
-  fromMemento(): void;
-}
-
 interface Cache {
   i: number;
   j: number;
   coins: Coin[];
 }
 
-class FlyweightCache implements Memento<string> {
+
+class CacheManager 
+{
   public cacheMap: Map<string, Cache> = new Map();
 
-  public getCache(i: number, j: number): Cache {
+  public getCache(i: number, j: number): Cache
+  {
     const key = `${i}, ${j}`;
 
-    if (!this.cacheMap.has(key)) {
-      const newCache: Cache = {
+    if (!this.cacheMap.has(key))
+    {
+      const newCache: Cache =
+      {
         i: i * GCS_CONVERSION,
         j: j * GCS_CONVERSION,
         coins: [],
       };
-
       this.cacheMap.set(key, newCache);
     }
 
-    return this.cacheMap.get(key)!;
+    return this.cacheMap.get(key) as Cache;
   }
 
-  public saveGameState(
-    playerLocation: leaflet.LatLng,
-    playerCoins: Coin[],
-  ): void {
-    const cacheData = Array.from(this.cacheMap.values()).map((cache) => ({
+  public isInPlayerView(cache: Cache, playerLocation: leaflet.LatLng): boolean
+  {
+    const cacheLocation = this.getCellCenter(cache);
+    const distance = playerLocation.distanceTo(cacheLocation);
+    return distance <= GRID_SIZE * 15;
+  }
+
+  public getCellCenter(cache: Cache): leaflet.LatLng
+  {
+    const origin = NULL_ISLAND;
+  
+    const centerLat = (origin.lat + (cache.i + 0.5) * TILE_SIZE) / GCS_CONVERSION;
+    const centerLng = (origin.lng + (cache.j + 0.5) * TILE_SIZE) / GCS_CONVERSION;
+  
+    return leaflet.latLng(centerLat, centerLng);
+  }
+
+  public getCachesFromMap(): Cache[] 
+  {
+    return Array.from(this.cacheMap.values());
+  }
+
+  public clearCachesFromMap()
+  {
+    this.cacheMap.clear();
+  }
+
+  public getCellBounds(cache: Cache): leaflet.LatLng 
+  {
+    const origin = NULL_ISLAND;
+  
+    const centerLat = (origin.lat + (cache.i + 0.5) * TILE_SIZE) / GCS_CONVERSION;
+    const centerLng = (origin.lng + (cache.j + 0.5) * TILE_SIZE) / GCS_CONVERSION;
+  
+    const northEastCorner = leaflet.latLng(
+      centerLat + (TILE_SIZE / 2),
+      centerLng + (TILE_SIZE / 2),
+    );
+    const southWestCorner = leaflet.latLng(
+      centerLat - (TILE_SIZE / 2),
+      centerLng - (TILE_SIZE / 2),
+    );
+  
+    return leaflet.latLngBounds(northEastCorner, southWestCorner);
+  }
+}
+
+
+class GameState
+{
+
+  public saveGameState(playerLocation: leaflet.LatLng, playerCoins: Coin[], cacheManager: CacheManager,): void
+  {
+    const cacheData = cacheManager.getCachesFromMap().map((cache) => 
+    ({
       i: cache.i,
       j: cache.j,
       coins: cache.coins,
     }));
 
-    const savedState = {
-      playerLocation: {
-        latitude: playerLocation.lat,
-        longitude: playerLocation.lng,
-      },
+    const savedState = 
+    {
+      playerLocation: { latitude: playerLocation.lat, longitude: playerLocation.lng },
       playerCoins,
       cacheData,
     };
@@ -64,60 +111,37 @@ class FlyweightCache implements Memento<string> {
     localStorage.setItem("savedGameState", JSON.stringify(savedState));
   }
 
-  public restoreGameState(): void {
+
+  public restoreGameState(playerCoins: Coin[], cacheManager: CacheManager,): void
+  {
     const savedState = localStorage.getItem("savedGameState");
 
-    if (savedState) {
-      const savedData = JSON.parse(savedState);
-      const { playerLocation, playerCoins, cacheData } = savedData;
+    if (savedState)
+    {
+      const { playerLocation, cacheData, playerCoins: restoredCoins } = JSON.parse(savedState);
 
-      const playerGeolocation = new leaflet.LatLng(
-        playerLocation.latitude,
-        playerLocation.longitude,
-      );
-      marker.setLatLng(playerGeolocation);
-      map.setView(playerGeolocation, GAMEPLAY_ZOOM_LEVEL);
+      const playerGeoLocation = new leaflet.LatLng(playerLocation.latitude, playerLocation.longitude);
+      marker.setLatLng(playerGeoLocation);
+      map.setView(playerGeoLocation, GAMEPLAY_ZOOM_LEVEL);
 
       playerCoins.length = 0;
-      playerCoins.forEach((coin: Coin) => {
-        playerCoins.push(coin);
-      });
+      playerCoins.push(...restoredCoins);
 
-      cacheData.forEach((cacheObj: Cache) => {
-        const cache = flyweightCache.getCache(cacheObj.i, cacheObj.j);
+      cacheData.forEach((cacheObj: Cache) => 
+      {
+        const cache = cacheManager.getCache(cacheObj.i, cacheObj.j);
         cache.coins = cacheObj.coins;
       });
     }
-
-    displayCaches();
   }
 
-  public resetGameState() {
-    const resetGame = prompt("Type 'yes' to reset the game state");
 
-    if (resetGame === "yes") {
-      localStorage.removeItem("savedGameState");
+  public toMemento(cacheManager: CacheManager, playerLocation: leaflet.LatLng, playerCoins: Coin[]): void 
+  {
+    const cachesToData = cacheManager.getCachesFromMap().filter((cache) => !cacheManager.isInPlayerView(cache, playerLocation));
 
-      marker.setLatLng([0, 0]);
-      map.setView([0, 0], GAMEPLAY_ZOOM_LEVEL);
-      playerCoins.length = 0;
-      this.cacheMap.clear();
-      clearCacheMarkers();
-
-      generateInitialCaches(0, 0);
-      displayCaches();
-      polylineCoords = [[0, 0]];
-      polyline.setLatLngs(polylineCoords);
-      statusPanel.innerHTML = "Coins Collected:<br>";
-      this.saveGameState(marker.getLatLng(), playerCoins);
-    }
-  }
-
-  public toMemento(): void {
-    const cachesToData = Array.from(this.cacheMap.values()).filter((cache) =>
-      !this.isInPlayerView(cache)
-    );
-    const cacheData = cachesToData.map((cache) => ({
+    const cacheData = cachesToData.map((cache) => 
+    ({
       i: cache.i,
       j: cache.j,
       coins: cache.coins,
@@ -125,39 +149,92 @@ class FlyweightCache implements Memento<string> {
 
     localStorage.setItem("cacheData", JSON.stringify(cacheData));
 
-    cachesToData.forEach((cache) => {
-      const key = `${cache.i}, ${cache.j}`;
-      this.cacheMap.delete(key);
-    });
+    cacheManager.clearCachesFromMap();
 
-    flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+    this.saveGameState(playerLocation, playerCoins, cacheManager);
   }
 
-  public fromMemento(): void {
+
+  public fromMemento(cacheManager: CacheManager): void 
+  {
     const caches = localStorage.getItem("cacheData");
 
-    if (caches) {
-      const cacheData: { i: number; j: number; coins: Coin[] }[] = JSON.parse(
-        caches,
-      );
+    if (caches) 
+    {
+      const cacheData: { i: number; j: number; coins: Coin[] }[] = JSON.parse(caches);
 
-      cacheData.forEach((cacheObj) => {
-        const cache = this.getCache(cacheObj.i, cacheObj.j);
+      cacheData.forEach((cacheObj) => 
+      {
+        const cache = cacheManager.getCache(cacheObj.i, cacheObj.j);
         cache.coins = cacheObj.coins;
       });
     }
 
-    flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
+    localStorage.removeItem("cacheData");
   }
 
-  public isInPlayerView(cache: Cache): boolean {
-    const playerLocation = marker.getLatLng();
-    const cacheLocation = getCellCenter(cache);
 
-    const distance = playerLocation.distanceTo(cacheLocation);
+  public resetGameState(cacheManager: CacheManager): void
+  {
+    const resetGame = prompt("Type 'yes' to reset the game state");
 
-    return distance <= GRID_SIZE * 15;
+    if (resetGame === "yes") 
+    {
+      localStorage.removeItem("savedGameState");
+
+      marker.setLatLng([0, 0]);
+      map.setView([0, 0], GAMEPLAY_ZOOM_LEVEL);
+      playerCoins.length = 0;
+      cacheManager.clearCachesFromMap();
+      clearCacheMarkers();
+
+      generateInitialCaches(0, 0);
+      displayCaches();
+      polylineCoords = [[0, 0]];
+      polyline.setLatLngs(polylineCoords);
+      statusPanel.innerHTML = "Coins Collected:<br>";
+      this.saveGameState(marker.getLatLng(), playerCoins, cacheManager);
+    }
   }
+
+}
+
+
+class FlyweightCache 
+{
+  public cacheManager: CacheManager;
+  public gameState: GameState;
+
+  constructor()
+  {
+    this.cacheManager = new CacheManager();
+    this.gameState = new GameState();
+  }
+
+
+  public saveGameState(playerLocation: leaflet.LatLng, playerCoins: Coin[]): void
+  {
+    this.gameState.saveGameState(playerLocation, playerCoins, this.cacheManager);
+  }
+
+
+  public restoreGameState(playerCoins: Coin[]): void
+  {
+    this.gameState.restoreGameState(playerCoins, this.cacheManager);
+  }
+
+
+  public resetGameState(): void
+  {
+    this.gameState.resetGameState(this.cacheManager);
+  }
+
+
+  public isCacheInPlayerView(cache: Cache, playerLocation: leaflet.LatLng): boolean
+  {
+    return this.cacheManager.isInPlayerView(cache, playerLocation);
+  }
+
 }
 
 const playerCoins: Coin[] = [];
@@ -194,7 +271,8 @@ const marker = leaflet.circleMarker(NULL_ISLAND, {
 document.querySelector<HTMLDivElement>("#buttons")!;
 
 document.addEventListener("DOMContentLoaded", () => {
-  flyweightCache.restoreGameState();
+  
+  flyweightCache.restoreGameState(playerCoins);
 
   const geoLocationButton = document.getElementById("geolocation");
   const moveUpButton = document.getElementById("up");
@@ -235,7 +313,7 @@ let polylineCoords: leaflet.LatLngExpression[] = [[0, 0]];
 const polyline = leaflet.polyline(polylineCoords, { color: "red" }).addTo(map);
 
 function spawnCache(cache: Cache) {
-  const bounds = getCellBounds(cache);
+  const bounds = flyweightCache.cacheManager.getCellBounds(cache);
   const rect = leaflet.rectangle(bounds).setStyle({ color: "gold" });
   rect.addTo(map);
   cacheMarkers.push(rect);
@@ -302,7 +380,7 @@ function createCachePopup(rect: leaflet.rectangle, cache: Cache) {
 
     if (centerButton) {
       centerButton.addEventListener("click", function () {
-        const newCenter = getCellCenter(cache);
+        const newCenter = flyweightCache.cacheManager.getCellCenter(cache);
         map.setView(newCenter);
       });
     }
@@ -334,38 +412,12 @@ function updateDisplay(
   flyweightCache.saveGameState(marker.getLatLng(), playerCoins);
 }
 
-function getCellBounds(cache: Cache) {
-  const origin = NULL_ISLAND;
-
-  const centerLat = (origin.lat + (cache.i + 0.5) * TILE_SIZE) / GCS_CONVERSION;
-  const centerLng = (origin.lng + (cache.j + 0.5) * TILE_SIZE) / GCS_CONVERSION;
-
-  const northEastCorner = leaflet.latLng(
-    centerLat + (TILE_SIZE / 2),
-    centerLng + (TILE_SIZE / 2),
-  );
-  const southWestCorner = leaflet.latLng(
-    centerLat - (TILE_SIZE / 2),
-    centerLng - (TILE_SIZE / 2),
-  );
-
-  return leaflet.latLngBounds(northEastCorner, southWestCorner);
-}
-
-function getCellCenter(cache: Cache) {
-  const origin = NULL_ISLAND;
-
-  const centerLat = (origin.lat + (cache.i + 0.5) * TILE_SIZE) / GCS_CONVERSION;
-  const centerLng = (origin.lng + (cache.j + 0.5) * TILE_SIZE) / GCS_CONVERSION;
-
-  return leaflet.latLng(centerLat, centerLng);
-}
 
 function generateInitialCaches(positionI: number, positionJ: number) {
   for (let i = positionI - GRID_SIZE; i < positionI + GRID_SIZE; i++) {
     for (let j = positionJ - GRID_SIZE; j < positionJ + GRID_SIZE; j++) {
       if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-        flyweightCache.getCache(i, j);
+        flyweightCache.cacheManager.getCache(i, j);
       }
     }
   }
@@ -399,14 +451,14 @@ function generateCaches(direction: string) {
       break;
   }
 
-  for (let i = newPlayerGridI; i < newPlayerGridI + (2 * GRID_SIZE); i++) {
-    for (let j = newPlayerGridJ; j < newPlayerGridJ + (2 * GRID_SIZE); j++) {
+  for (let i = newPlayerGridI; i < newPlayerGridI + (2 * GRID_SIZE); i++) 
+  {
+    for (let j = newPlayerGridJ; j < newPlayerGridJ + (2 * GRID_SIZE); j++) 
+    {
       const key = `${i}, ${j}`;
-      if (
-        luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY &&
-        !flyweightCache.cacheMap.has(key)
-      ) {
-        flyweightCache.getCache(i, j);
+      if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY && !flyweightCache.cacheManager.cacheMap.has(key)) 
+      {
+        flyweightCache.cacheManager.getCache(i, j);
       }
     }
   }
@@ -417,8 +469,10 @@ function generateCaches(direction: string) {
 function displayCaches() {
   clearCacheMarkers();
 
-  flyweightCache.cacheMap.forEach((cache) => {
-    if (flyweightCache.isInPlayerView(cache)) {
+  flyweightCache.cacheManager.cacheMap.forEach((cache) => 
+  {
+    if (flyweightCache.isCacheInPlayerView(cache, marker.getLatLng())) 
+    {
       spawnCache(cache);
     }
   });
